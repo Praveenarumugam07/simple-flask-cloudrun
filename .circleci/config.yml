@@ -23,6 +23,8 @@ jobs:
   deploy:
     executor: custom-gcloud
     steps:
+      - setup_remote_docker
+
       - checkout
 
       - run:
