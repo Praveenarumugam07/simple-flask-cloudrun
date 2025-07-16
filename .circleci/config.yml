@@ -31,7 +31,7 @@ jobs:
           name: ✅ Validate required environment variables
           shell: /bin/bash
           command: |
-            REQUIRED_VARS=("GCP_SA_KEY_B64" "GCP_PROJECT_ID" "GCP_REGION" "CLOUD_RUN_SERVICE")
+            REQUIRED_VARS=("GCP_SA_KEY_B64" "GCP_PROJECT_ID" "GCP_REGION" "CLOUD_RUN_SERVICE" "ARTIFACT_REPO")
             for i in "${REQUIRED_VARS[@]}"; do
               if [[ -z "${!i}" ]]; then
                 echo "❌ ERROR: Missing environment variable $i"
@@ -49,25 +49,37 @@ jobs:
             gcloud config set project "$GCP_PROJECT_ID"
 
       - run:
-          name: ⚙️ Configure Docker for gcloud
+          name: ⚙️ Configure Docker for Artifact Registry
           command: |
-            gcloud auth configure-docker
+            gcloud auth configure-docker $GCP_REGION-docker.pkg.dev
+
+      - run:
+          name: 🏗️ Create Artifact Registry repo if not exists
+          command: |
+            if ! gcloud artifacts repositories describe $ARTIFACT_REPO --location=$GCP_REGION; then
+              gcloud artifacts repositories create $ARTIFACT_REPO \
+                --repository-format=docker \
+                --location=$GCP_REGION \
+                --description="Docker repo for Cloud Run app"
+            else
+              echo "✅ Artifact Registry repo $ARTIFACT_REPO already exists"
+            fi
 
       - run:
           name: 🐳 Build Docker image
           command: |
-            docker build -t gcr.io/$GCP_PROJECT_ID/$CLOUD_RUN_SERVICE .
+            docker build -t $GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$ARTIFACT_REPO/$CLOUD_RUN_SERVICE .
 
       - run:
-          name: 🚀 Push Docker image to GCR
+          name: 🚀 Push Docker image to Artifact Registry
           command: |
-            docker push gcr.io/$GCP_PROJECT_ID/$CLOUD_RUN_SERVICE
+            docker push $GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$ARTIFACT_REPO/$CLOUD_RUN_SERVICE
 
       - run:
           name: ☁️ Deploy to Cloud Run
           command: |
             gcloud run deploy $CLOUD_RUN_SERVICE \
-              --image gcr.io/$GCP_PROJECT_ID/$CLOUD_RUN_SERVICE \
+              --image $GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$ARTIFACT_REPO/$CLOUD_RUN_SERVICE \
               --platform managed \
               --region $GCP_REGION \
               --allow-unauthenticated
