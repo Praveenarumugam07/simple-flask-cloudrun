@@ -1,0 +1,80 @@
+version: 2.1
+
+executors:
+  python-linter:
+    docker:
+      - image: cimg/python:3.10
+
+  custom-gcloud:
+    docker:
+      - image: google/cloud-sdk:slim
+
+jobs:
+  test:
+    executor: python-linter
+    steps:
+      - checkout
+      - run:
+          name: ✅ Lint Python code
+          command: |
+            pip install pylint
+            pylint app.py --disable=import-error || true
+
+  deploy:
+    executor: custom-gcloud
+    steps:
+      - checkout
+
+      - run:
+          name: ✅ Validate required environment variables
+          shell: /bin/bash
+          command: |
+            REQUIRED_VARS=("GCP_SA_KEY_B64" "GCP_PROJECT_ID" "GCP_REGION" "CLOUD_RUN_SERVICE")
+            for i in "${REQUIRED_VARS[@]}"; do
+              if [[ -z "${!i}" ]]; then
+                echo "❌ ERROR: Missing environment variable $i"
+                exit 1
+              else
+                echo "✅ $i is set"
+              fi
+            done
+
+      - run:
+          name: 🔐 Authenticate with GCP
+          command: |
+            echo "$GCP_SA_KEY_B64" | base64 -d > gcloud-key.json
+            gcloud auth activate-service-account --key-file=gcloud-key.json
+            gcloud config set project "$GCP_PROJECT_ID"
+
+      - run:
+          name: ⚙️ Configure Docker for gcloud
+          command: |
+            gcloud auth configure-docker
+
+      - run:
+          name: 🐳 Build Docker image
+          command: |
+            docker build -t gcr.io/$GCP_PROJECT_ID/$CLOUD_RUN_SERVICE .
+
+      - run:
+          name: 🚀 Push Docker image to GCR
+          command: |
+            docker push gcr.io/$GCP_PROJECT_ID/$CLOUD_RUN_SERVICE
+
+      - run:
+          name: ☁️ Deploy to Cloud Run
+          command: |
+            gcloud run deploy $CLOUD_RUN_SERVICE \
+              --image gcr.io/$GCP_PROJECT_ID/$CLOUD_RUN_SERVICE \
+              --platform managed \
+              --region $GCP_REGION \
+              --allow-unauthenticated
+
+workflows:
+  version: 2
+  test-deploy:
+    jobs:
+      - test
+      - deploy:
+          requires:
+            - test
